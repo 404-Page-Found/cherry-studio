@@ -4,11 +4,11 @@
       "id": "gateway-v1.8.1",
       "type": "legacy",
       "match": {
-        "exact": ["1.8.1"]
+        "range": ">=1.0.0 <1.8.1"
       },
       "lockedVersion": "1.8.1",
       "minCompatibleVersion": "1.0.0",
-      "description": "Gateway version - all users below v1.8.1 must upgrade to v1.8.1 first",
+      "description": "Gateway version - all users below v1.8.1 must upgrade to 1.8.1 first",
       "channelTemplates": {
         "latest": {
           "feedTemplates": {
