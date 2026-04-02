@@ -562,5 +562,90 @@ describe('StreamEventManager', () => {
 
       warnSpy.mockRestore()
     })
+
+    it('should enqueue error event when recursiveCall rejects', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const controller = createMockStreamController()
+      const testError = new Error('Provider connection failed')
+
+      const context = createMockContext({
+        hasExecutedToolsInCurrentStep: true,
+        recursiveCall: vi.fn().mockRejectedValue(testError)
+      })
+
+      await manager.handleRecursiveCall(controller, {}, context)
+
+      expect(errorSpy).toHaveBeenCalledWith('[MCP Prompt] Recursive call failed:', testError)
+      expect(controller.enqueue).toHaveBeenCalledWith({
+        type: 'error',
+        error: testError
+      })
+      // Should not enqueue any other events (no finish-step, no text-delta)
+      expect(controller.enqueue).toHaveBeenCalledTimes(1)
+
+      errorSpy.mockRestore()
+    })
+
+    it('should enqueue error event when recursiveCall times out', async () => {
+      vi.useFakeTimers()
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const controller = createMockStreamController()
+
+      // recursiveCall never resolves — simulates a hanging provider
+      const context = createMockContext({
+        hasExecutedToolsInCurrentStep: true,
+        recursiveCall: vi.fn().mockReturnValue(new Promise(() => {}))
+      })
+
+      const promise = manager.handleRecursiveCall(controller, {}, context)
+
+      // Advance past the 120s timeout
+      await vi.advanceTimersByTimeAsync(120_001)
+      await promise
+
+      expect(controller.enqueue).toHaveBeenCalledWith({
+        type: 'error',
+        error: expect.objectContaining({
+          message: 'Recursive LLM call timed out'
+        })
+      })
+
+      errorSpy.mockRestore()
+      vi.useRealTimers()
+    })
+
+    it('should enqueue error event when pipeRecursiveStream encounters a read error', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const controller = createMockStreamController()
+
+      // Create a stream that throws on read
+      const throwingStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'text-delta', id: '1', text: 'hello' })
+        },
+        pull() {
+          throw new Error('Stream read failure')
+        }
+      })
+
+      const context = createMockContext({
+        hasExecutedToolsInCurrentStep: true,
+        recursiveCall: vi.fn().mockResolvedValue({
+          fullStream: throwingStream
+        })
+      })
+
+      await manager.handleRecursiveCall(controller, {}, context)
+
+      expect(errorSpy).toHaveBeenCalledWith('[MCP Prompt] Error piping recursive stream:', expect.any(Error))
+      expect(controller.enqueue).toHaveBeenCalledWith({
+        type: 'error',
+        error: expect.objectContaining({
+          message: 'Stream read failure'
+        })
+      })
+
+      errorSpy.mockRestore()
+    })
   })
 })
