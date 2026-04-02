@@ -11,6 +11,8 @@ import type { AiSdkUsage } from '../../../providers/types'
 import type { AiRequestContext, StreamTextParams, StreamTextResult } from '../../types'
 import type { StreamController } from './ToolExecutor'
 
+const RECURSIVE_CALL_TIMEOUT_MS = 120_000
+
 /**
  * 类型守卫：检查对象是否是有效的流结果（包含 ReadableStream 类型的 fullStream）
  */
@@ -111,20 +113,38 @@ export class StreamEventManager {
     recursiveParams: Partial<TParams>,
     context: AiRequestContext<TParams, StreamTextResult>
   ): Promise<void> {
-    // try {
-    // 重置工具执行状态，准备处理新的步骤
-    context.hasExecutedToolsInCurrentStep = false
+    try {
+      context.hasExecutedToolsInCurrentStep = false
 
-    const recursiveResult = await context.recursiveCall(recursiveParams)
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      const recursiveResult = await Promise.race([
+        context.recursiveCall(recursiveParams),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('Recursive LLM call timed out')), RECURSIVE_CALL_TIMEOUT_MS)
+        })
+      ]).finally(() => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId)
+      })
 
-    if (hasFullStream(recursiveResult)) {
-      await this.pipeRecursiveStream(controller, recursiveResult.fullStream)
-    } else {
-      console.warn('[MCP Prompt] No fullstream found in recursive result:', recursiveResult)
+      if (hasFullStream(recursiveResult)) {
+        await this.pipeRecursiveStream(controller, recursiveResult.fullStream)
+      } else {
+        console.warn('[MCP Prompt] No fullstream found in recursive result:', recursiveResult)
+        controller.enqueue({
+          type: 'finish-step',
+          finishReason: 'stop',
+          usage: {},
+          response: undefined,
+          providerMetadata: undefined
+        })
+      }
+    } catch (error) {
+      console.error('[MCP Prompt] Recursive call failed:', error)
+      controller.enqueue({
+        type: 'error',
+        error: error instanceof Error ? error : new Error(String(error))
+      })
     }
-    // } catch (error) {
-    //   this.handleRecursiveCallError(controller, error, stepId)
-    // }
   }
 
   /**
@@ -148,6 +168,12 @@ export class StreamEventManager {
 
         controller.enqueue(value)
       }
+    } catch (error) {
+      console.error('[MCP Prompt] Error piping recursive stream:', error)
+      controller.enqueue({
+        type: 'error',
+        error: error instanceof Error ? error : new Error(String(error))
+      })
     } finally {
       reader.releaseLock()
     }
