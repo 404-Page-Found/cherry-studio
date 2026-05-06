@@ -474,7 +474,13 @@ class ClaudeCodeService implements AgentServiceInterface {
       abortController,
       cwd,
       env,
-      // model: modelInfo.modelId,
+      // Pass the explicit model id to the SDK. This ensures Claude Code uses
+      // the provider's real model (e.g. `moonshot:kimi-k2.6`) instead of any
+      // agent-prefixed or SDK-default model names that may not exist or be
+      // accessible (e.g. `agent/kimi-k2.6`). The environment variables are
+      // set as well for compatibility, but providing the option is more
+      // explicit and prevents ambiguous SDK behavior.
+      model: modelInfo.modelId,
       pathToClaudeCodeExecutable: this.claudeExecutablePath,
       spawnClaudeCodeProcess: (spawnOptions) => {
         const childEnv = { ...spawnOptions.env } as NodeJS.ProcessEnv
